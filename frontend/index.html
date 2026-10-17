@@ -148,10 +148,11 @@
         const map = L.map('map').setView([currentLat, currentLng], 15);
 
         // 2. Add OpenStreetMap Tile Layer
-        //  Fast, open global CDN tiles (no 403 block!):
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+       //  Smooth scaling: Never shows blank tiles even when zoomed all the way in!
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
             maxZoom: 19,
-            attribution: '© OpenStreetMap © CARTO'
+            maxNativeZoom: 17,
+            attribution: 'Tiles © Esri — Source: Esri, DeLorme, NAVTEQ, USGS'
         }).addTo(map);
 
         // 3. Custom Emoji Bus Marker Pin
