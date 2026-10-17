@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>College Bus Tracker - Live Map</title>
+
+    <!-- Leaflet CSS (Map Styling) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f7fafc;
+        }
+
+        #header {
+            background-color: #1a365d;
+            color: white;
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        #header h1 {
+            margin: 0;
+            font-size: 1.25rem;
+        }
+
+        #dashboard {
+            display: flex;
+            height: calc(100vh - 56px);
+        }
+
+        #sidebar {
+            width: 320px;
+            background: white;
+            border-right: 1px solid #e2e8f0;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 14px;
+        }
+
+        .card h3 {
+            margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+            color: #4a5568;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+
+        .badge-live { background-color: #c6f6d5; color: #22543d; }
+        .badge-offline { background-color: #fed7d7; color: #742a2a; }
+
+        .stat-value {
+            font-size: 1.3rem;
+            font-weight: bold;
+            color: #2b6cb0;
+            margin: 4px 0;
+        }
+
+        #recenter-btn {
+            background-color: #2b6cb0;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        #recenter-btn:hover {
+            background-color: #2c5282;
+        }
+
+        #map {
+            flex: 1;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="header">
+        <h1>🚌 College Bus Transit — Live Tracker</h1>
+        <span id="connection-status" class="badge badge-offline">Connecting...</span>
+    </div>
+
+    <div id="dashboard">
+        <!-- Sidebar Controls & Stats -->
+        <div id="sidebar">
+            <div class="card">
+                <h3>Bus Profile</h3>
+                <div id="bus-name" class="stat-value">Route 4 - North Express</div>
+                <div id="bus-id-label" style="color: #718096; font-size: 0.85rem;">Bus ID: #1</div>
+            </div>
+
+            <div class="card">
+                <h3>Telemetry</h3>
+                <div>Current Speed: <span id="bus-speed" class="stat-value">-- km/h</span></div>
+                <div style="font-size: 0.85rem; color: #718096; margin-top: 6px;">
+                    Last Signal: <span id="last-updated">Waiting for GPS...</span>
+                </div>
+            </div>
+
+            <button id="recenter-btn" onclick="recenterMap()">🎯 Re-Center on Bus</button>
+        </div>
+
+        <!-- The Interactive Map Canvas -->
+        <div id="map"></div>
+    </div>
+
+    <!-- Leaflet JS Library -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        const BUS_ID = 1;
+        const API_URL = `http://localhost:5000/api/buses/${BUS_ID}/location`;
+
+        // 1. Initialize Map centered at Hyderabad / Campus
+        let currentLat = 17.385044;
+        let currentLng = 78.486671;
+        let userHasPanned = false; // Tracks if user moved map manually
+
+        const map = L.map('map').setView([currentLat, currentLng], 15);
+
+        // 2. Add OpenStreetMap Tile Layer
+        //  Fast, open global CDN tiles (no 403 block!):
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap © CARTO'
+        }).addTo(map);
+
+        // 3. Custom Emoji Bus Marker Pin
+        const busIcon = L.divIcon({
+            html: '<div style="font-size: 32px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">🚌</div>',
+            className: 'custom-bus-pin',
+            iconSize: [36, 36],
+            iconAnchor: [18, 18]
+        });
+
+        const busMarker = L.marker([currentLat, currentLng], { icon: busIcon }).addTo(map);
+        busMarker.bindPopup("<b>Bus #1</b><br>Tracking Live");
+
+        // Disable auto-centering when student drags map
+        map.on('dragstart', () => { userHasPanned = true; });
+
+        function recenterMap() {
+            userHasPanned = false;
+            map.flyTo([currentLat, currentLng], 16, { duration: 1 });
+        }
+
+        // 4. Polling Function: Fetches latest GPS from Flask backend every 3.5 seconds
+        async function fetchBusLocation() {
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}`);
+                }
+
+                const data = await response.json();
+                const loc = data.location;
+
+                currentLat = loc.latitude;
+                currentLng = loc.longitude;
+                const speed = loc.speed;
+                const recordedTime = new Date(loc.recorded).toLocaleTimeString();
+
+                // Move Marker on Map!
+                busMarker.setLatLng([currentLat, currentLng]);
+                busMarker.setPopupContent(`<b>${data.bus_name}</b><br>Speed: ${speed} km/h<br>Time: ${recordedTime}`);
+
+                // Auto-center camera only if student hasn't panned away
+                if (!userHasPanned) {
+                    map.panTo([currentLat, currentLng]);
+                }
+
+                // Update UI Sidebar
+                document.getElementById('connection-status').className = 'badge badge-live';
+                document.getElementById('connection-status').innerText = '🟢 Live Signal';
+                document.getElementById('bus-speed').innerText = `${speed} km/h`;
+                document.getElementById('last-updated').innerText = recordedTime;
+
+            } catch (err) {
+                document.getElementById('connection-status').className = 'badge badge-offline';
+                document.getElementById('connection-status').innerText = '🔴 Offline / Lost';
+                console.warn("Could not reach bus tracking backend:", err);
+            }
+        }
+
+        // Initial fetch + repeat every 3.5 seconds
+        fetchBusLocation();
+        setInterval(fetchBusLocation, 3500);
+    </script>
+</body>
+</html>
