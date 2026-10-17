@@ -43,7 +43,9 @@ while True:
             data = response.json()
             loc = data["location"]
 
-            print(f"[{loc['updated_at'][11:19]}] Step {step} | Lat: {loc['latitude']} | Lng: {loc['longitude']} | Speed: {loc['speed']} km/h -> Server: 201 OK")
+            #  Updated line using the database column name 'recorded':
+            recorded_time = str(loc['recorded'])[11:19]
+            print(f"[{recorded_time}] Step {step} | Lat: {loc['latitude']} | Lng: {loc['longitude']} | Speed: {loc['speed']} km/h -> Server: 201 OK")
 
         else:
 

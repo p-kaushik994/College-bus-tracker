@@ -112,72 +112,107 @@ def create_bus():
             conn.close()
 
 # # --- ROUTE 4: DRIVER SENDS GPS COORDINATES ---
-# @app.route("/api/buses/<int:bus_id>/location", methods=["POST"])
-# def update_bus_location(bus_id):
-#     """
-#     Called by the Driver App to transmit live GPS coordinates.
-#     """
-#     # 1. Make sure the bus actually exists in our fleet
-#     if bus_id not in BUSES:
-#         return jsonify({"error": f"Bus {bus_id} does not exist in the fleet"}), 404
-
-#     # 2. Extract JSON payload
-#     data = request.get_json()
-
-#     # 3. Input Validation
-#     if not data or "latitude" not in data or "longitude" not in data:
-        
-#         return jsonify({"error": "'latitude' and 'longitude' are required fields"}), 400
-
-#     try:
-#         lat = float(data["latitude"])
-#         lng = float(data["longitude"])
-#         speed = float(data.get("speed", 0.0))
-
-#     except (ValueError, TypeError):
-
-#         return jsonify({"error": "Latitude, longitude, and speed must be valid numbers"}), 400
-
-#     # 4. Save the latest location record with an ISO timestamp
-#     location_record = {
-#         "bus_id": bus_id,
-#         "latitude": lat,
-#         "longitude": lng,
-#         "speed": speed,
-#         "updated_at": datetime.now().isoformat()
-#     }
-#     BUS_LOCATIONS[bus_id] = location_record
-
-#     return jsonify({
-#         "message": "Location updated successfully",
-#         "location": location_record
-#     }), 201
+@app.route("/api/buses/<int:bus_id>/location", methods=["POST"])
+def update_bus_location(bus_id):
+    """
+    Called by the Driver App to transmit live GPS coordinates.
+    Saves directly into PostgreSQL bus_location table.
+    """
+    data = request.get_json()
+    # 1. Validation
+    if not data or "latitude" not in data or "longitude" not in data:
+        return jsonify({"error": "'latitude' and 'longitude' are required fields"}), 400
+    try:
+        lat = float(data["latitude"])
+        lng = float(data["longitude"])
+        speed = float(data.get("speed", 0.0))
+    except (ValueError, TypeError):
+        return jsonify({"error": "Latitude, longitude, and speed must be valid numbers"}), 400
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # 2. Check if the bus exists in the buses table
+        cur.execute("SELECT id FROM buses WHERE id = %s;", (bus_id,))
+        if not cur.fetchone():
+            return jsonify({"error": f"Bus {bus_id} does not exist in the fleet"}), 404
+        # 3. Insert the new location ping into bus_location table
+        cur.execute(
+            """
+            INSERT INTO bus_location (bus_id, latitude, longitude, speed, recorded)
+            VALUES (%s, %s, %s, %s, NOW())
+            RETURNING id, bus_id, latitude, longitude, speed, recorded;
+            """,
+            (bus_id, lat, lng, speed)
+        )
+        new_location = cur.fetchone()
+        # 4. Commit write to disk!
+        conn.commit()
+        return jsonify({
+            "message": "Location recorded successfully in database",
+            "location": new_location
+        }), 201
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 # # --- ROUTE 5: STUDENT CHECKS LIVE LOCATION ---
-# @app.route("/api/buses/<int:bus_id>/location", methods=["GET"])
-# def get_bus_location(bus_id):
-#     """
-#     Called by the Student App to view where the bus is right now.
-#     """
-#     # 1. Check if bus exists
-#     if bus_id not in BUSES:
-#         return jsonify({"error": f"Bus {bus_id} not found"}), 404
-
-#     # 2. Check if the driver has transmitted any location yet
-#     if bus_id not in BUS_LOCATIONS:
-#         return jsonify({
-#             "bus_id": bus_id,
-#             "status": "offline",
-#             "message": "Bus has not transmitted any location data yet"
-#         }), 404
-
-#     # 3. Return the latest live location
-#     return jsonify({
-#         "bus_id": bus_id,
-#         "status": "live",
-#         "location": BUS_LOCATIONS[bus_id]
- #   }), 200
+@app.route("/api/buses/<int:bus_id>/location", methods=["GET"])
+def get_bus_location(bus_id):
+    """
+    Called by the Student App to view where the bus is right now.
+    Queries the single latest GPS point from PostgreSQL.
+    """
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # 1. Check if bus exists
+        cur.execute("SELECT id, bus_name FROM buses WHERE id = %s;", (bus_id,))
+        bus = cur.fetchone()
+        if not bus:
+            return jsonify({"error": f"Bus {bus_id} not found"}), 404
+        # 2. Query the single latest coordinate using our B-Tree index!
+        cur.execute(
+            """
+            SELECT id, bus_id, latitude, longitude, speed, recorded
+            FROM bus_location
+            WHERE bus_id = %s
+            ORDER BY recorded DESC
+            LIMIT 1;
+            """,
+            (bus_id,)
+        )
+        latest_location = cur.fetchone()
+        if not latest_location:
+            return jsonify({
+                "bus_id": bus_id,
+                "bus_name": bus["bus_name"],
+                "status": "offline",
+                "message": "Bus has not transmitted any location data yet"
+            }), 404
+        return jsonify({
+            "bus_id": bus_id,
+            "bus_name": bus["bus_name"],
+            "status": "live",
+            "location": latest_location
+        }), 200
+    except Exception as e:
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
